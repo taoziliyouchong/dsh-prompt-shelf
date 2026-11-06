@@ -1,0 +1,4 @@
+# dsh-prompt-shelf：宿主半边注册本机路由，浏览器半边由 package.json 的 dsh.client 声明发现。
+- insert:
+    - id: dsh-prompt-shelf
+      name: dsh-prompt-shelf

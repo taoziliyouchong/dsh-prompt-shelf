@@ -1,0 +1,110 @@
+# dsh-prompt-shelf
+
+**中文** | [English](README.en.md)
+
+把常用提示词存进 DSH：输入框工具行里多一个「常用提示词」按钮，点开是一张列表窗口，
+可以存当前草稿、也可以把某条一键送进输入框。
+
+## 入口在哪
+
+输入框卡片底部工具行里、「完全权限」右边，文字「常用提示词」加条数。新会话的空白页也有这个入口。
+
+## 怎么用
+
+- **存**：「存入当前输入」把输入框现有内容存成一条；空框时按钮灰着，同正文不会重复存。
+- **写**：「＋ 新建」直接在窗口里写一条（标题 + 正文），保存后排在卡片最前。
+- **找**：顶部搜索框按标题和正文过滤。
+- **用**：卡片头右侧有「插入」（在光标处追加，不动已写的内容）与「替换」（整框换成这条）。
+  插入不关窗口，可以连着挑好几条。
+- **改**：卡片内展开编辑标题与正文；标题留空时自动取正文首行。
+- **删**：进回收站，默认留 3 天；工具行右侧「回收站」里能看每条还剩几天，并可一键恢复。
+  保留天数可改（1~365），改完立刻按新天数清理过期条目。
+- **关**：右上角 ×、点窗口外的暗区、或按 Esc（编辑中按 Esc 先退编辑）。
+
+## 变量
+
+正文里写 `{{名称}}` 或 `{{名称=默认值}}`，这张卡片的正文里那个位置就变成一个输入框：
+插入时用填的值替换，不填就用默认值，同名变量共用一份值。
+
+编辑卡片时看到的是带 `{{…}}` 的原文——改模板在那里改。新建或编辑时正文框下方有「＋ 变量」，
+把光标放到要放变量的位置点它就在光标处插入 `{{变量}}` 并选中「变量」两字，直接打字就是改名。
+正文框里按 **Alt+V**（或 Ctrl+Alt+V）同效，只在这个框里生效，不是全局快捷键。
+
+## @ 里选用
+
+- **任务输入框**里打 `@`：菜单里多出「常用提示词」一组，选中一条把正文落到光标处。
+- **新建 / 编辑卡片的输入框**里打 `@`：列出工作区文件与文件夹（上下键选、回车或 Tab 选中、Esc 关），
+  选中插入 `@路径`（目录带尾斜杠，路径含空格时用 `@"路径"`）。
+
+## 数据存哪
+
+真源是宿主侧的 `$DSH_HOME/data/dsh-prompt-shelf/state.json`（写入先落 `.tmp` 再改名，旧的留 `.bak`），
+经本插件的本机路由读写；浏览器侧另存一份 localStorage 缓存（键 `dsh.prompt-shelf.v1`）用于首屏。
+
+为什么不直接用 localStorage：它按 origin 隔离，而桌面端每次启动端口都不同，刷新或重启后条目就读不到了。
+与插件包分开存：重装、升级插件都不影响条目。
+
+## 安装
+
+```sh
+dsh plugin --profile desktop add github:taoziliyouchong/dsh-prompt-shelf
+```
+
+发布到 npm 之后也可以：
+
+```sh
+dsh plugin --profile desktop add dsh-prompt-shelf
+```
+
+装完重启 DSH。用别的 profile 就把 `desktop` 换成你的 profile 名。
+要求：DSH 0.2.1 系列的桌面端或 `dsh web`。兼容：DSH 0.2.1 系列；0.3 起不保证。
+
+## 机制
+
+- 界面挂在 list 槽 `conversation.input.left`（session 范围，渲染在 permission / plan 之后）；
+  窗口是 `createPortal` 到 `document.body` 的覆盖层——输入框容器会裁剪，不 portal 就弹不出来。
+- 宿主半边注册三条本机路由，只接受回环地址：
+  - `GET /dsh-prompt-shelf/api/state`、`POST` 同路径（读写条目）
+  - `GET /dsh-prompt-shelf/api/files`（按查询词列工作区文件，递归 3 层、封顶 400 条）
+  - `GET /dsh-prompt-shelf/api/plugins`（插件加载器实时表里的第三方插件）
+- 读写输入框只用宿主给的 slot 标准 props：`useInput` 读草稿，`inputActions.captureInsertion()` /
+  `insertText(text, span)` 插到光标处，`setDraft(text)` 整框替换。不碰编辑器 DOM。
+- 不联网、不上传任何内容；所有数据只在本机。
+
+## 已知限制
+
+- 条目上限 5000 条、单次写入上限 1MB；超了会被拒并提示。
+- 只在本机回环地址下可用：远程访问的 DSH 上，路由会回 403。
+- 「替换」是整框覆盖，会盖掉输入框里现有的内容（「插入」不会）。
+
+## 开发
+
+```sh
+npm install
+npm run build:client    # 从 src/entry.jsx 重新生成 lib/client.js
+npm run check:client    # 已提交产物与源码一致
+npm run check           # 语法
+npm run smoke           # 结构 / 组合声明 / 宿主路由 / 鉴权 / 产物 / 伴随插件 六关
+```
+
+`lib/client.js` 是提交进仓库的构建产物：从 GitHub 安装时不跑构建，缺了它界面不加载。
+打包要求：`react`、`react/jsx-runtime`、`react-dom` 保持 external（由 DSH 客户端模块表提供）；
+产物外壳 `window.__ModuleLoader__.load({ id, factory })` 里的 `id` 必须等于包名。
+
+源码：
+
+- `src/entry.jsx` —— 浏览器半边（按钮、窗口、卡片、变量、@ 源）
+- `index.js` —— 宿主半边（三条本机路由、状态文件读写）
+
+## 反馈
+
+插件有问题，按这个顺序：
+
+1. 开 Issue：https://github.com/taoziliyouchong/dsh-prompt-shelf/issues —— 能留痕、能搜历史；
+2. 急着问或不想开 Issue，QQ 号：**2171960697**（加好友请注明装的是哪个插件）。
+
+反馈时带上：DSH 版本、插件版本、报错原文、截图。
+
+## 许可
+
+MIT
