@@ -8,7 +8,6 @@
  *   3. 宿主半边    —— index.js 导出名等于包名，桩 ctx 跑 apply 注册 3 条本机路由
  *   4. 路由鉴权    —— 非回环请求 403、非允许方法 405；GET 状态路由返回空状态不写盘
  *   5. 客户端产物  —— 外壳 id == 包名，且带上了本插件的路由与座位
- *   6. 伴随插件    —— invariant.js 登记的包名符合约定
  *
  * 用法：node scripts/smoke.mjs   （任一条失败退出码 1）
  */
@@ -30,7 +29,6 @@ const fail = (label, why) => {
 /** 1. 包结构 */
 const REQUIRED = [
   'index.js',
-  'invariant.js',
   'cordis.patch.yml',
   'src/entry.jsx',
   'lib/client.js',
@@ -153,18 +151,6 @@ else if (!client.includes('/' + pkg.name + '/api/state')) fail('客户端产物'
 else if (!client.includes('conversation.input.left')) fail('客户端产物', '产物里没有座位 conversation.input.left')
 else if (!client.includes('registerSource')) fail('客户端产物', '产物里没有 @ 源注册（源码改了但没重新构建）')
 else ok('客户端产物', 'id=' + pkg.name + '，' + Buffer.byteLength(client, 'utf8') + ' 字节')
-
-/** 6. 伴随插件 */
-const companion = await import(pathToFileURL(join(root, 'invariant.js')).href)
-if (companion.name !== pkg.name + '-invariant') fail('伴随插件', '导出的 name 是 ' + companion.name + '，应为 ' + pkg.name + '-invariant')
-else if (!Array.isArray(companion.inject) || !companion.inject.includes('invariants')) fail('伴随插件', 'inject 里没有 invariants')
-else {
-  const registered = []
-  const invariantCtx = { invariants: { register: (name) => registered.push(name) } }
-  await companion.apply(invariantCtx)
-  if (registered[0] !== pkg.name) fail('伴随插件', '登记的包名是 ' + registered[0] + '，应为 ' + pkg.name)
-  else ok('伴随插件', '登记 ' + pkg.name)
-}
 
 console.log('')
 if (problems.length > 0) {

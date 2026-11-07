@@ -1,18 +1,16 @@
 {
   "name": "dsh-prompt-shelf",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "在输入框工具行里存常用提示词：搜索、插入或整框替换，带变量与回收站。",
   "type": "module",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
-    "./invariant": "./invariant.js",
     "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
-    "invariant.js",
     "cordis.patch.yml",
     "src",
     "lib/client.js",
@@ -48,7 +46,7 @@
   "scripts": {
     "build:client": "node scripts/build-client.mjs",
     "check:client": "node scripts/build-client.mjs --check",
-    "check": "node --check index.js && node --check invariant.js",
+    "check": "node --check index.js",
     "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {

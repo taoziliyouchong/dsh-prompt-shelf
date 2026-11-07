@@ -17,8 +17,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
-/** 需要的客户端服务：槽、@ 触发器、会话清单（取当前工作区目录）。 */
-export const inject = ['slots', 'inputTriggers', 'sessions']
+/** 需要的客户端服务：槽、@ 触发器、会话清单、宿主 remote（list 全量会话）。 */
+export const inject = ['slots', 'inputTriggers', 'sessions', 'remote']
 
 /** localStorage 键：带版本号，将来字段变了可以并存另一份。 */
 const STORAGE_KEY = 'dsh.prompt-shelf.v1'
@@ -893,7 +893,7 @@ function useMentionField(listFiles, applyPick) {
     return false
   }, [chosen, menu, pick, rows])
 
-  return { menu, rows, chosen, activeSection, setActiveSection, setChosen, track, onKeyDown, close }
+  return { menu, rows, chosen, activeSection, setActiveSection, setChosen, track, pick, onKeyDown, close }
 }
 
 /**
@@ -1129,6 +1129,14 @@ export function PromptShelf(props) {
   const useInput = props && typeof props.useInput === 'function' ? props.useInput : null
   const inputActions = props ? props.inputActions : undefined
   const draft = String((useInput ? useInput((s) => s.draft) : EMPTY_INPUT.draft) || '')
+
+  /** @ 候选查询：把当前会话 id 带进去——用它取工作区目录、把自己的会话从「对话」里排掉。 */
+  const rawListFiles = props ? props.listFiles : undefined
+  const sessionId = props ? props.sessionId : undefined
+  const mentionFiles = useCallback(
+    (keyword) => (typeof rawListFiles === 'function' ? rawListFiles(keyword, sessionId) : Promise.resolve([])),
+    [rawListFiles, sessionId],
+  )
 
   const [items, setItems] = useState(() => readLocalCache().items)
   const [trash, setTrash] = useState(() => readLocalCache().trash)
@@ -1438,7 +1446,7 @@ export function PromptShelf(props) {
                   onText={(text) => setEditing({ ...editing, text })}
                   onCancel={() => setEditing(null)}
                   onSave={saveEdit}
-                  listFiles={props.listFiles}
+                  listFiles={mentionFiles}
                 />
               </article>
             ) : null}
@@ -1520,7 +1528,7 @@ export function PromptShelf(props) {
                         onText={(text) => setEditing({ ...editing, text })}
                         onCancel={() => setEditing(null)}
                         onSave={saveEdit}
-                        listFiles={props.listFiles}
+                        listFiles={mentionFiles}
                       />
                     ) : varNames.length > 0 ? (
                       <div className="zps-cardtext zps-cardtext-vars">
@@ -1534,7 +1542,7 @@ export function PromptShelf(props) {
                               name={part.name}
                               fallback={part.fallback}
                               onChange={(value) => setVar(item.id, part.name, value)}
-                              listFiles={props.listFiles}
+                              listFiles={mentionFiles}
                             />
                           )
                         ))}
@@ -1588,6 +1596,38 @@ export function PromptShelf(props) {
   )
 }
 
+/** 相对时间：刚刚 / N 分钟前 / N 小时前 / N 天前 / 日期（时间戳为 0 时留空）。 */
+function relativeAge(at) {
+  const stamp = Number(at || 0)
+  if (!Number.isFinite(stamp) || stamp <= 0) return ''
+  const diff = Math.max(0, Date.now() - stamp)
+  const minute = 60 * 1000
+  const hour = 60 * minute
+  const day = 24 * hour
+  if (diff < minute) return '刚刚'
+  if (diff < hour) return Math.floor(diff / minute) + ' 分钟前'
+  if (diff < day) return Math.floor(diff / hour) + ' 小时前'
+  if (diff < 30 * day) return Math.floor(diff / day) + ' 天前'
+  const date = new Date(stamp)
+  return date.getFullYear() + '-'
+    + String(date.getMonth() + 1).padStart(2, '0') + '-'
+    + String(date.getDate()).padStart(2, '0')
+}
+
+/**
+ * 会话引用的规范写法：`@[标题](dsh-session:<base64url(JSON 字符串)>)`。
+ * 与宿主 `encodeSessionReferenceUri` 同构——宿主按这条解析，格式偏一位就解析不到。
+ * @param sessionId - 会话 id（ASCII，可直接进 base64）。
+ * @param label - 显示标题（只出现在方括号里，转义 `\` 与 `]`）。
+ * @returns 规范 mention。
+ */
+function sessionMention(sessionId, label) {
+  const binary = btoa(JSON.stringify(String(sessionId)))
+  const payload = binary.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const safe = String(label).replace(/[\\\]]/g, match => `\\${match}`)
+  return `@[${safe}](dsh-session:${payload})`
+}
+
 /**
  * 造一个「按查询词列 @ 候选」的函数：与任务输入框一样分两组——文件与文件夹（宿主路由 /api/files）、
  * 对话（会话清单）。两者都只用本机数据，不依赖客户端的远程命名空间。
@@ -1597,22 +1637,29 @@ export function PromptShelf(props) {
 function createMentionLister(ctx) {
   const sessions = typeof ctx.get === 'function' ? ctx.get('sessions') : undefined
 
-  /** 当前工作区目录：优先打开中的会话，其次第一个带目录的会话。 */
-  const cwdOf = () => {
+  /** 会话清单快照：取不到按空表（侧栏用的就是这一份）。 */
+  const snapshot = () => {
     try {
-      const byId = (sessions && sessions.list && sessions.list.getSnapshot().byId) || {}
-      const ids = Object.keys(byId)
-      const openId = ids.find((id) => byId[id] && byId[id].openState === 'open')
-      const withCwd = ids.find((id) => byId[id] && byId[id].cwd)
-      const id = openId || withCwd || ids[0]
-      return id ? String(byId[id].cwd || '') : ''
+      return (sessions && sessions.list && sessions.list.getSnapshot().byId) || {}
     } catch {
-      return ''
+      return {}
     }
   }
 
-  const listFiles = async (query) => {
-    const dir = cwdOf()
+  /** 工作区目录：当前会话的 cwd，其次任一打开中的会话，最后任一有 cwd 的会话。 */
+  const cwdOf = (sessionId) => {
+    const byId = snapshot()
+    const own = sessionId === undefined ? undefined : byId[sessionId]
+    if (own && own.cwd) return String(own.cwd)
+    const ids = Object.keys(byId)
+    const openId = ids.find((id) => byId[id] && byId[id].cwd && byId[id].openState === 'open')
+    const withCwd = ids.find((id) => byId[id] && byId[id].cwd)
+    const id = openId || withCwd
+    return id ? String(byId[id].cwd || '') : ''
+  }
+
+  const listFiles = async (query, sessionId) => {
+    const dir = cwdOf(sessionId)
     if (!dir) return []
     try {
       const url = new URL(String(FILES_API).replace(/^\/+/, ''), document.baseURI)
@@ -1626,25 +1673,69 @@ function createMentionLister(ctx) {
     }
   }
 
-  const listSessions = (query) => {
+  /**
+   * 全量会话清单：优先问宿主 `remote.session.list`（侧栏刷新用的同一份数据，不需要会话的 agent），
+   * 取不到再退回客户端快照。两条都空时把原因带出来，面板上看得见。
+   * @returns { items, note }
+   */
+  const listAllSessions = async () => {
     try {
-      const byId = (sessions && sessions.list && sessions.list.getSnapshot().byId) || {}
-      const keyword = String(query || '').trim().toLowerCase()
-      return Object.keys(byId)
-        .map((id) => byId[id])
-        .filter((entry) => entry && (entry.title || entry.displayTitle))
-        .map((entry) => ({
-          id: entry.id,
-          title: String(entry.title || entry.displayTitle || '').trim(),
-          updatedAt: entry.updatedAt || 0,
-        }))
-        .filter((entry) => entry.title)
-        .filter((entry) => !keyword || entry.title.toLowerCase().includes(keyword))
-        .sort((a, b) => b.updatedAt - a.updatedAt)
-        .slice(0, 10)
-    } catch {
-      return []
+      const remote = ctx && ctx.remote ? ctx.remote.session : undefined
+      if (remote !== undefined && typeof remote.list === 'function') {
+        const result = await remote.list({})
+        if (result && result.ok === true && result.value && Array.isArray(result.value.items)) {
+          return { items: result.value.items, note: '' }
+        }
+        if (result && result.ok === false) {
+          const error = result.error || {}
+          return { items: [], note: String(error.message || error.code || '宿主返回失败') }
+        }
+      }
+    } catch (error) {
+      return { items: [], note: String((error && error.message) || error) }
     }
+    const byId = snapshot()
+    const items = Object.keys(byId).map((id) => ({ ...byId[id], sessionId: (byId[id] && byId[id].sessionId) || id }))
+    return { items, note: items.length === 0 ? '会话清单为空' : '' }
+  }
+
+  /**
+   * 历史对话：从全量会话清单里取，排除当前会话与子代理；
+   * 引用按宿主同构的 `@[标题](dsh-session:<base64url(JSON)>)` 拼（宿主按这条解析成会话引用）。
+   * @param query - 查询词。
+   * @param sessionId - 当前会话（用来排除自己、补工作区）。
+   * @returns 候选行；清单取不到时返回一行说明。
+   */
+  const listSessions = async (query, sessionId) => {
+    const { items, note } = await listAllSessions()
+    const keyword = String(query || '').trim().toLowerCase()
+    const byId = snapshot()
+    const ownCwd = sessionId === undefined ? '' : String((byId[sessionId] && byId[sessionId].cwd) || '')
+    const rows = items
+      .filter((item) => item !== undefined && item.sessionId !== sessionId)
+      .filter((item) => item.origin !== 'subagent')
+      .map((item) => ({
+        id: item.sessionId,
+        title: String(item.displayTitle || item.title || item.sessionId),
+        cwd: item.cwd === undefined ? '' : String(item.cwd),
+        updatedAt: item.updatedAt || 0,
+      }))
+      .filter((entry) => entry.title !== '')
+      .filter((entry) => !keyword || (entry.title + '\n' + entry.cwd).toLowerCase().includes(keyword))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, 12)
+      .map((entry) => ({
+        ...entry,
+        desc: [
+          entry.cwd === '' || entry.cwd === ownCwd ? '' : entry.cwd,
+          relativeAge(entry.updatedAt),
+        ].filter(Boolean).join(' · '),
+        mention: sessionMention(entry.id, entry.title),
+      }))
+    if (rows.length === 0 && note !== '') {
+      return [{ id: 'diag', title: '（会话清单取不到）', desc: note, mention: '' }]
+    }
+    return rows
   }
 
   /** 已装插件清单：拉到后缓存 60 秒（清单不常变，避免每敲一个字都打路由）。 */
@@ -1668,9 +1759,9 @@ function createMentionLister(ctx) {
       .slice(0, 20)
   }
 
-  return async (query) => {
+  return async (query, sessionId) => {
     const [files, chats, plugins] = await Promise.all([
-      listFiles(query), Promise.resolve(listSessions(query)), listPlugins(query),
+      listFiles(query, sessionId), listSessions(query, sessionId), listPlugins(query),
     ])
     const rows = []
     for (const hit of files) {
@@ -1693,12 +1784,12 @@ function createMentionLister(ctx) {
       const title = String(chat.title || '').trim()
       if (!title) continue
       rows.push({
-        id: 'chat:' + (chat.id || title),
+        id: 'chat:' + chat.id,
         icon: 'session',
         label: title,
-        desc: '对话',
+        desc: chat.desc || '',
         section: '对话',
-        mention: /[\s"']/.test(title) ? '@"' + title + '"' : '@' + title,
+        mention: chat.mention,
       })
     }
     for (const plugin of plugins) {
