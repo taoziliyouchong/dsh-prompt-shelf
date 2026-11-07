@@ -62,7 +62,7 @@ dsh plugin --profile desktop add dsh-prompt-shelf
 ```
 
 Restart DSH afterwards. Replace `desktop` with your own profile name if you use another one.
-Requirements: the DSH 0.2.2 line, desktop app or `dsh web` (verified on 0.2.2-rc.1). Compatible with DSH 0.2.2-rc.1; later versions are untested.
+Requirements: DSH 0.2.1 or later, desktop app or `dsh web` (verified on 0.2.1-alpha.3 and 0.2.2-rc.1). Compatible with DSH 0.2.1-alpha.3 through 0.2.2-rc.1 (the highest version verified locally); later versions are untested.
 
 ## How it works
 

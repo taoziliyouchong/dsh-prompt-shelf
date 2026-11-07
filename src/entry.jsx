@@ -561,7 +561,8 @@ function createPromptSource() {
   return {
     trigger: '@',
     name: '常用提示词',
-    order: 10,
+    // 20：排在「工作区文件」(10) 之后、「历史会话」(30) 之前，和别的 @ 源同序时顺序稳定。
+    order: 20,
     async candidates(_session, req) {
       const keyword = String(req.query || '').trim().toLowerCase()
       const used = new Map()
@@ -580,6 +581,9 @@ function createPromptSource() {
           }
         })
     },
+    // 纯文本出口：返回 { text } 换掉触发词，草稿里只有文字、不生成引用卡片——
+    // 所以这个源不需要 codec。哪天改成返回 { insert: { source: … } } 插卡片，
+    // 就必须同时补 codec，否则发送会报 slash: no serializer for reference source "常用提示词"。
     onPick(pick) {
       const id = pick.candidate.value
       const item = knownItems().find((it) => it.id === id)
