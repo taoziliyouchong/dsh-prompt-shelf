@@ -27,6 +27,7 @@ New-session blank pages show it too.
 
 Write `{{name}}` or `{{name=default}}` in the body and that spot becomes an input field on the card:
 inserting substitutes the filled value, falling back to the default, and same-named variables share one value.
+A variable box also accepts `@` to reference workspace files (see below).
 
 Editing a card shows the raw `{{…}}` template, which is where you change it. While creating or editing,
 "＋ Variable" below the body box inserts `{{variable}}` at the cursor and selects the word, so typing renames it.
@@ -38,6 +39,9 @@ In that body box, **Alt+V** (or Ctrl+Alt+V) does the same; it only works there, 
 - In the card editor's inputs, typing `@` lists workspace files and folders (arrow keys to move, Enter or Tab
   to pick, Esc to close); picking inserts `@path` (folders end with a slash, and a path containing spaces
   is written as `@"path"`).
+- In a card's **variable box**, typing `@` lists the same files, sessions and plugins (the list floats below
+  the input and flips above when there is no room); picking fills `@path` into that variable's value, so after
+  inserting or replacing into the composer the model reads the file as an @ reference.
 
 ## Where the data lives
 

@@ -31,7 +31,7 @@ const PLUGINS_API = '/dsh-prompt-shelf/api/plugins'
 /** 没写标题时，取正文首行前多少字当标题。 */
 const TITLE_MAX = 28
 /** 编辑表单下的占位符写法说明。 */
-const TEMPLATE_HINT = '正文里写 {{变量名}}，或 {{变量名=默认值}}；插入时用卡片里填的值替换（不填就用默认值）。正文框里按 Alt+V（或 Ctrl+Alt+V）也能插入变量。'
+const TEMPLATE_HINT = '正文里写 {{变量名}}，或 {{变量名=默认值}}；插入时用卡片里填的值替换（不填就用默认值）。正文框里按 Alt+V（或 Ctrl+Alt+V）也能插入变量；卡片上的变量框里打 @ 可引用工作区文件。'
 
 /** 输入框不可用时的兜底状态（dock 是 session 范围，理论上永远有输入框）。 */
 const EMPTY_INPUT = { draft: '' }
@@ -208,13 +208,13 @@ const CSS = `
 }
 /* 有变量的卡片：正文按段渲染，变量位置是小输入框，直接原位改。 */
 .zps-cardtext-vars { display: block; cursor: default; }
+.zps-varwrap { display: inline-block; margin: 0 2px; vertical-align: baseline; }
 .zps-var {
   display: inline-block;
   box-sizing: border-box;
   min-width: 84px;
   max-width: 260px;
   height: 22px;
-  margin: 0 2px;
   padding: 0 6px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: var(--dsw-radius-xs);
@@ -225,6 +225,15 @@ const CSS = `
   vertical-align: baseline;
 }
 .zps-var:focus { outline: none; border-color: var(--dsw-alias-brand-primary); }
+/* 变量框的 @ 候选：portal 到 body 的浮层，不被卡片滚动容器裁掉。 */
+.zps-varmenu {
+  position: fixed;
+  z-index: 1100;
+  width: 360px;
+  max-width: calc(100vw - 16px);
+  border-radius: 10px;
+  box-shadow: var(--dsw-elevation-prominent);
+}
 .zps-varbadge { flex: none; font-size: 11px; color: var(--dsw-alias-label-secondary); }
 .zps-placeholder {
   flex: 1 1 auto;
@@ -693,6 +702,11 @@ function mentionAt(value, caret) {
   return { start: at, end: pos, query }
 }
 
+/** 刚敲下一个 @：长度只多 1，且新字符就是 @。打开候选菜单的时机只认这个。 */
+function typedAtChar(previous, next, caret) {
+  return String(next || '').length === String(previous || '').length + 1 && String(next || '').charAt(caret - 1) === '@'
+}
+
 /** 行首图标：文件 / 文件夹 / 对话 / 插件（与输入框 @ 菜单同一套观感）。 */
 function MentionIcon(props) {
   const kind = props.kind
@@ -777,6 +791,112 @@ function MentionMenu(props) {
 }
 
 /**
+ * 输入框里的 @ 候选状态：标题框、正文框、卡片上的变量框共用同一套。
+ * 触发规则与宿主一致：@ 在行首或空白之后、@ 后不含空白，才算触发词。
+ * @param listFiles - 查候选：query → 行数组（[{ id, label, desc, section, mention }]）。
+ * @param applyPick - 选中一行后怎么改值：applyPick(row, menu)，menu 带 { field, start, end, query }。
+ * @returns track（输入变化时喂）、onKeyDown（键盘）、rows / chosen / activeSection / setActiveSection / setChosen（菜单渲染）、close。
+ */
+function useMentionField(listFiles, applyPick) {
+  const [menu, setMenu] = useState(null)
+  const [chosen, setChosen] = useState(0)
+  const [activeSection, setActiveSection] = useState(null)
+  const [hits, setHits] = useState([])
+  const fetchTimer = useRef(0)
+  const fetchSeq = useRef(0)
+
+  /** 按查询词问一下宿主：工作区里有哪些文件/文件夹。 */
+  const refreshHits = useCallback((query) => {
+    window.clearTimeout(fetchTimer.current)
+    const seq = ++fetchSeq.current
+    fetchTimer.current = window.setTimeout(() => {
+      const ask = listFiles
+      if (typeof ask !== 'function') {
+        setHits([])
+        return
+      }
+      Promise.resolve(ask(query)).then((list) => {
+        if (seq !== fetchSeq.current) return
+        setHits(Array.isArray(list) ? list.slice(0, 20) : [])
+      }).catch(() => {
+        if (seq === fetchSeq.current) setHits([])
+      })
+    }, 120)
+  }, [listFiles])
+
+  useEffect(() => () => window.clearTimeout(fetchTimer.current), [])
+
+  /**
+   * 喂一次输入变化。
+   * @param field - 哪个输入框（同一个 hook 服务多个框时用来隔离）。
+   * @param value - 变化后的整段文字。
+   * @param caret - 光标位置。
+   * @param typedAt - 本次变化是不是刚敲下 @。
+   */
+  const track = useCallback((field, value, caret, typedAt) => {
+    const pos = typeof caret === 'number' && caret > 0 ? caret : String(value || '').length
+    const hit = mentionAt(value, pos)
+    if (typedAt) {
+      if (!hit) {
+        setMenu(null)
+        return
+      }
+      setMenu({ field, start: hit.start, end: hit.end, query: hit.query })
+      setChosen(0)
+      setActiveSection(null)
+      refreshHits(hit.query)
+      return
+    }
+    setMenu((prev) => {
+      if (!prev || prev.field !== field) return prev
+      if (!hit) return null
+      refreshHits(hit.query)
+      return { field, start: hit.start, end: hit.end, query: hit.query }
+    })
+  }, [refreshHits])
+
+  const close = useCallback(() => setMenu(null), [])
+
+  /** 类别栏筛选后的可见行。 */
+  const rows = activeSection ? hits.filter((row) => row.section === activeSection) : hits
+
+  /** 选中一行：关菜单，把「@查询段」交给调用方替换成 row.mention。 */
+  const pick = useCallback((row) => {
+    if (!menu || !row) return
+    const settled = menu
+    setMenu(null)
+    applyPick(row, settled)
+  }, [applyPick, menu])
+
+  /** 菜单打开时的键盘：上下选、回车/制表选中、Esc 关。返回 true 表示已处理。 */
+  const onKeyDown = useCallback((event) => {
+    if (!menu) return false
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      if (rows.length > 0) {
+        const step = event.key === 'ArrowDown' ? 1 : -1
+        setChosen((prev) => (prev + step + rows.length) % rows.length)
+      }
+      return true
+    }
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault()
+      const row = rows[Math.min(chosen, Math.max(0, rows.length - 1))] || rows[0]
+      if (row) pick(row)
+      return true
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setMenu(null)
+      return true
+    }
+    return false
+  }, [chosen, menu, pick, rows])
+
+  return { menu, rows, chosen, activeSection, setActiveSection, setChosen, track, onKeyDown, close }
+}
+
+/**
  * 一张卡片的编辑表单（新建与编辑共用）：标题 + 正文 +「＋ 变量」。
  * 两个输入框里都能打 @ 选已有常用提示词：标题框插「名」，正文框插「整段正文」。
  * 「＋ 变量」把 {{变量}} 插到正文编辑框的光标处，并把「变量」两字选中——直接打字就是改名。
@@ -794,79 +914,10 @@ function TemplateEditor(props) {
   const onSave = props.onSave
   const titleRef = useRef(null)
   const textareaRef = useRef(null)
-  const [menu, setMenu] = useState(null)
-  const [chosen, setChosen] = useState(0)
-  /** 类别栏的当前选择：null = 全部。 */
-  const [activeSection, setActiveSection] = useState(null)
-  /** @ 候选：宿主给的工作区文件/文件夹。 */
-  const [hits, setHits] = useState([])
-  const fetchTimer = useRef(0)
-  const fetchSeq = useRef(0)
   const prevValue = useRef('')
 
-  /** 按查询词问一下宿主：工作区里有哪些文件/文件夹。 */
-  const refreshHits = useCallback((query) => {
-    window.clearTimeout(fetchTimer.current)
-    const seq = ++fetchSeq.current
-    fetchTimer.current = window.setTimeout(() => {
-      const ask = props.listFiles
-      if (typeof ask !== 'function') {
-        setHits([])
-        return
-      }
-      Promise.resolve(ask(query)).then((list) => {
-        if (seq !== fetchSeq.current) return
-        setHits(Array.isArray(list) ? list.slice(0, 20) : [])
-      }).catch(() => {
-        if (seq === fetchSeq.current) setHits([])
-      })
-    }, 120)
-  }, [props.listFiles])
-
-  useEffect(() => () => window.clearTimeout(fetchTimer.current), [])
-
-  /** 候选行由 lister 直接给（文件与文件夹在前、对话、插件），这里不再加工。 */
-  const rows = hits
-  /** 类别栏筛选后的可见行。 */
-  const visibleRows = activeSection ? rows.filter((row) => row.section === activeSection) : rows
-
-  /** 输入变化后看一眼光标前是不是 @ 触发词；光标位置拿不到就按文本末尾算。 */
-  const openMention = useCallback((field, value, caret, element) => {
-    if (!element) {
-      setMenu(null)
-      return
-    }
-    let pos = typeof caret === 'number' && caret > 0 ? caret : 0
-    if (pos === 0 && typeof element.selectionStart === 'number' && element.selectionStart > 0) {
-      pos = element.selectionStart
-    }
-    if (pos === 0) pos = String(value || '').length
-    const hit = mentionAt(value, pos)
-    if (!hit) {
-      setMenu(null)
-      return
-    }
-    setMenu({ field, start: hit.start, end: hit.end, query: hit.query })
-    setChosen(0)
-    setActiveSection(null)
-    refreshHits(hit.query)
-  }, [refreshHits])
-
-  /** 菜单已打开时跟随输入更新查询词；不再处于触发态就关掉。 */
-  const followMention = useCallback((field, value, caret) => {
-    setMenu((prev) => {
-      if (!prev || prev.field !== field) return prev
-      const pos = typeof caret === 'number' && caret > 0 ? caret : String(value || '').length
-      const hit = mentionAt(value, pos)
-      if (!hit) return null
-      refreshHits(hit.query)
-      return { ...prev, start: hit.start, end: hit.end, query: hit.query }
-    })
-  }, [refreshHits])
-
-  /** 选中一行：把 @查询段换成 @路径。 */
-  const pickMention = useCallback((row) => {
-    if (!menu || !row) return
+  /** 选中一行：把「@查询段」换成 row.mention，光标落在插入内容之后。 */
+  const applyMention = useCallback((row, menu) => {
     const isTitle = menu.field === 'title'
     const current = isTitle ? String(editing.title || '') : String(editing.text || '')
     const next = current.slice(0, menu.start) + row.mention + current.slice(menu.end)
@@ -874,39 +925,15 @@ function TemplateEditor(props) {
     else onText(next)
     const caret = menu.start + row.mention.length
     prevValue.current = next
-    setMenu(null)
     window.requestAnimationFrame(() => {
       const el = isTitle ? titleRef.current : textareaRef.current
       if (!el) return
       el.focus()
       el.setSelectionRange(caret, caret)
     })
-  }, [editing, menu, onText, onTitle])
+  }, [editing, onText, onTitle])
 
-  /** 菜单打开时的键盘：上下选、回车/制表选中、Esc 关。返回 true 表示已处理。 */
-  const menuKey = useCallback((event) => {
-    if (!menu) return false
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault()
-      if (visibleRows.length > 0) {
-        const step = event.key === 'ArrowDown' ? 1 : -1
-        setChosen((prev) => (prev + step + visibleRows.length) % visibleRows.length)
-      }
-      return true
-    }
-    if (event.key === 'Enter' || event.key === 'Tab') {
-      event.preventDefault()
-      const row = visibleRows[Math.min(chosen, Math.max(0, visibleRows.length - 1))] || visibleRows[0]
-      if (row) pickMention(row)
-      return true
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      setMenu(null)
-      return true
-    }
-    return false
-  }, [chosen, menu, pickMention, visibleRows])
+  const mention = useMentionField(props.listFiles, applyMention)
 
   const insertVariable = useCallback(() => {
     const node = textareaRef.current
@@ -933,13 +960,12 @@ function TemplateEditor(props) {
         onChange={(event) => {
           const value = event.target.value
           const caret = event.target.selectionStart || 0
-          const typedAt = value.length === prevValue.current.length + 1 && value.charAt(caret - 1) === '@'
+          const typedAt = typedAtChar(prevValue.current, value, caret)
           prevValue.current = value
           onTitle(value)
-          if (typedAt) openMention('title', value, caret, event.target)
-          else followMention('title', value, caret)
+          mention.track('title', value, caret, typedAt)
         }}
-        onKeyDown={(event) => { menuKey(event) }}
+        onKeyDown={(event) => { mention.onKeyDown(event) }}
       />
       <textarea
         ref={textareaRef}
@@ -949,14 +975,13 @@ function TemplateEditor(props) {
         onChange={(event) => {
           const value = event.target.value
           const caret = event.target.selectionStart || 0
-          const typedAt = value.length === prevValue.current.length + 1 && value.charAt(caret - 1) === '@'
+          const typedAt = typedAtChar(prevValue.current, value, caret)
           prevValue.current = value
           onText(value)
-          if (typedAt) openMention('text', value, caret, event.target)
-          else followMention('text', value, caret)
+          mention.track('text', value, caret, typedAt)
         }}
         onKeyDown={(event) => {
-          if (menuKey(event)) return
+          if (mention.onKeyDown(event)) return
           if (event.isComposing || event.repeat) return
           const key = String(event.key || '').toLowerCase()
           // Alt+V（两键最省力）；Ctrl+Alt+V 是备用（输入法拦 Alt 时用）。
@@ -979,15 +1004,117 @@ function TemplateEditor(props) {
         <button type="button" className="zps-btn" onClick={onCancel}>取消</button>
         <button type="button" className="zps-btn primary" onClick={onSave}>保存</button>
       </div>
-      {menu
+      {mention.menu
         ? (
           <MentionMenu
-            rows={visibleRows}
-            active={activeSection}
-            onSelect={(key) => { setActiveSection(key); setChosen(0) }}
-            chosen={chosen}
-            onPick={pickMention}
+            rows={mention.rows}
+            active={mention.activeSection}
+            onSelect={(key) => { mention.setActiveSection(key); mention.setChosen(0) }}
+            chosen={mention.chosen}
+            onPick={(row) => mention.pick(row)}
           />
+        )
+        : null}
+    </div>
+  )
+}
+
+/**
+ * 卡片正文里的一个变量输入框：直接填值；打 @ 也能选工作区文件、对话、插件。
+ * 候选浮层 portal 到 document.body——卡片列表是滚动容器，就地渲染会被裁掉。
+ * @param props.value - 当前取值。
+ * @param props.name - 变量名（占位文字）。
+ * @param props.fallback - 默认值。
+ * @param props.onChange - 值变化。
+ * @param props.listFiles - @ 候选来源。
+ */
+function VarField(props) {
+  const value = String(props.value || '')
+  const onChange = props.onChange
+  const inputRef = useRef(null)
+  const prevValue = useRef(value)
+  /** 候选浮层的位置：相对视口的 fixed 坐标。 */
+  const [anchor, setAnchor] = useState(null)
+
+  /** 选中一行：把「@查询段」换成 row.mention。 */
+  const applyMention = useCallback((row, menu) => {
+    const current = String(props.value || '')
+    const next = current.slice(0, menu.start) + row.mention + current.slice(menu.end)
+    onChange(next)
+    prevValue.current = next
+    const caret = menu.start + row.mention.length
+    window.requestAnimationFrame(() => {
+      const el = inputRef.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(caret, caret)
+    })
+  }, [onChange, props.value])
+
+  const mention = useMentionField(props.listFiles, applyMention)
+  const open = mention.menu !== null
+
+  /** 菜单打开时按输入框的位置摆浮层：下方放不下就翻到上方。 */
+  useEffect(() => {
+    if (!open) {
+      setAnchor(null)
+      return undefined
+    }
+    const place = () => {
+      const el = inputRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const width = Math.max(280, Math.min(420, rect.width + 240))
+      const height = 248
+      const below = rect.bottom + 4 + height <= window.innerHeight
+      setAnchor({
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)),
+        top: below ? rect.bottom + 4 : Math.max(8, rect.top - 4 - height),
+        width,
+      })
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [open])
+
+  return (
+    <div className="zps-varwrap">
+      <input
+        ref={inputRef}
+        className="zps-var"
+        value={value}
+        placeholder={props.name}
+        title={'变量：' + props.name + '（默认值：' + (props.fallback || '空') + '；打 @ 可引用工作区文件）'}
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+        onBlur={() => mention.close()}
+        onChange={(event) => {
+          const next = event.target.value
+          const caret = event.target.selectionStart || 0
+          const typedAt = typedAtChar(prevValue.current, next, caret)
+          prevValue.current = next
+          onChange(next)
+          mention.track('var', next, caret, typedAt)
+        }}
+        onKeyDown={(event) => mention.onKeyDown(event)}
+      />
+      {open && anchor
+        ? createPortal(
+          <div className="zps-varmenu" style={{ left: anchor.left, top: anchor.top, width: anchor.width }}>
+            <MentionMenu
+              rows={mention.rows}
+              active={mention.activeSection}
+              onSelect={(key) => { mention.setActiveSection(key); mention.setChosen(0) }}
+              chosen={mention.chosen}
+              onPick={(row) => mention.pick(row)}
+            />
+          </div>,
+          document.body,
         )
         : null}
     </div>
@@ -1401,15 +1528,13 @@ export function PromptShelf(props) {
                           part.type === 'text' ? (
                             <span key={index}>{part.value}</span>
                           ) : (
-                            <input
+                            <VarField
                               key={index}
-                              className="zps-var"
                               value={templateValue(varValues[item.id], part.name, part.fallback)}
-                              placeholder={part.name}
-                              title={'变量：' + part.name + '（默认值：' + (part.fallback || '空') + '）'}
-                              onMouseDown={(event) => event.stopPropagation()}
-                              onClick={(event) => event.stopPropagation()}
-                              onChange={(event) => setVar(item.id, part.name, event.target.value)}
+                              name={part.name}
+                              fallback={part.fallback}
+                              onChange={(value) => setVar(item.id, part.name, value)}
+                              listFiles={props.listFiles}
                             />
                           )
                         ))}
