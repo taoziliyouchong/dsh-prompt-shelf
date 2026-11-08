@@ -35,13 +35,17 @@ In that body box, **Alt+V** (or Ctrl+Alt+V) does the same; it only works there, 
 
 ## Picking from the @ menu
 
-- In the task composer, typing `@` adds a "Saved prompts" group; picking one drops its body at the cursor.
-- In the card editor's inputs, typing `@` lists workspace files and folders (arrow keys to move, Enter or Tab
-  to pick, Esc to close); picking inserts `@path` (folders end with a slash, and a path containing spaces
-  is written as `@"path"`).
-- In a card's **variable box**, typing `@` lists the same files, sessions and plugins (the list floats below
-  the input and flips above when there is no room); picking fills `@path` into that variable's value, so after
-  inserting or replacing into the composer the model reads the file as an @ reference.
+- In the task composer, typing `@` shows a single "Saved prompts" entry first; picking it expands the saved
+  list, and picking a row from that list drops its body at the cursor. Typing after the expansion filters the
+  list; pressing Esc leaves `@常用提示词` in the draft for you to delete.
+- In the card editor's title and body inputs, typing `@` lists "Saved prompts / Files and folders / Chats /
+  Plugins"; the tab bar above the list narrows it to one kind. Picking a saved prompt inserts its title in
+  the title input and its full body in the body input; picking a file inserts `@path` (folders end with a
+  slash, and a path containing spaces is written as `@"path"`). Arrow keys move, Enter or Tab picks, Esc closes.
+- In a card's **variable box**, typing `@` lists the same kinds (the list floats below the input and flips
+  above when there is no room); picking a saved prompt fills the variable with its body, and picking a file
+  fills it with `@path`, so after inserting or replacing into the composer the model reads the file as an
+  @ reference.
 
 ## Where the data lives
 
@@ -66,7 +70,7 @@ dsh plugin --profile desktop add dsh-prompt-shelf
 ```
 
 Restart DSH afterwards. Replace `desktop` with your own profile name if you use another one.
-Requirements: DSH 0.2.1 or later, desktop app or `dsh web` (verified on 0.2.1-alpha.3 and 0.2.2-rc.1). Requires DSH >= 0.2.1-alpha.3; verified on 0.2.1-alpha.3 and 0.2.2-rc.1, later versions untested.
+Requirements: DSH 0.2.1 or later, desktop app or `dsh web` (verified on 0.2.1-alpha.3 and 0.2.2-rc.1). Requires DSH >= 0.2.1-alpha.1 (lower bound inferred from the services and slots the plugin uses, all present in alpha.1); verified on 0.2.1-alpha.3 and 0.2.2-rc.1, later versions untested.
 
 ## How it works
 
@@ -104,7 +108,7 @@ envelope must equal the package name.
 
 Source layout:
 
-- `src/entry.jsx` — the browser half (button, window, cards, variables, @ source)
+- `src/entry.jsx` — the browser half (button, window, cards, variables, the window's @ picker)
 - `index.js` — the host half (three loopback routes, state-file read/write)
 
 ## Feedback

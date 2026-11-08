@@ -557,8 +557,28 @@ function compactPreview(text) {
   return compact.length > 60 ? compact.slice(0, 60) + '…' : compact
 }
 
+/** 第一层的入口名，也是入口选中后写回草稿的触发查询。 */
+const PROMPT_ENTRY = '常用提示词'
+/** 入口选中后写回草稿的文字：替换掉那个 `@`，菜单按这个查询重开就是第二层。 */
+const PROMPT_ENTRY_TEXT = '@' + PROMPT_ENTRY
+/** 入口行的取值（与条目 id 区分开）。 */
+const PROMPT_ENTRY_VALUE = 'prompt-entry'
+/** 第二层没有条目时的说明行。 */
+const PROMPT_EMPTY_VALUE = 'prompt-empty'
+
+/** 查询是不是已经进了「常用提示词」这一层（选中入口后草稿里留着 `@常用提示词`）。 */
+function promptLayer(query) {
+  return String(query || '').startsWith(PROMPT_ENTRY)
+}
+
+/** 第二层里的过滤词：`@常用提示词` 后面继续打的字；没进第二层就整段查询词。 */
+function promptKeyword(query) {
+  const text = String(query || '')
+  return (promptLayer(text) ? text.slice(PROMPT_ENTRY.length) : text).trim().toLowerCase()
+}
+
 /**
- * 输入框的 @ 触发来源：打 @ 就能选常用提示词，选中后把条目正文插到触发段。
+ * 输入框的 @ 触发来源：分两层——打 @ 先只出「常用提示词」一项，选中它才展开条目列表。
  * 走宿主公开的 inputTriggers.registerSource（与宿主的 @ 文件/会话来源并列），不碰编辑器。
  */
 function createPromptSource() {
@@ -569,13 +589,30 @@ function createPromptSource() {
   }
   return {
     trigger: '@',
-    name: '常用提示词',
+    name: PROMPT_ENTRY,
     // 20：排在「工作区文件」(10) 之后、「历史会话」(30) 之前，和别的 @ 源同序时顺序稳定。
     order: 20,
+    // 第一层只有一项，组标题会和那一项重名；不画组标题。
+    showGroupTitle: false,
     async candidates(_session, req) {
-      const keyword = String(req.query || '').trim().toLowerCase()
+      const query = String(req.query || '')
+      // 第一层：@ 之后什么都没打时只出入口。选中入口后 onPick 把 `@常用提示词` 写回草稿，
+      // 菜单按这个查询重开，才进第二层。
+      if (query === '') {
+        return [{
+          name: PROMPT_ENTRY,
+          label: PROMPT_ENTRY,
+          description: '展开常用提示词列表',
+          drill: true,
+          value: PROMPT_ENTRY_VALUE,
+        }]
+      }
+      // 没进「常用提示词」这一层就什么都不出：条目只在选中入口之后才出现，
+      // 不会跟着别的关键词一起冒出来。
+      if (!promptLayer(query)) return []
+      const keyword = promptKeyword(query)
       const used = new Map()
-      return sortItems(knownItems())
+      const rows = sortItems(knownItems())
         .filter((item) => !keyword
           || (titleOf(item) + '\n' + item.text).toLowerCase().includes(keyword))
         .slice(0, 20)
@@ -589,13 +626,25 @@ function createPromptSource() {
             value: item.id,
           }
         })
+      if (rows.length === 0 && promptLayer(query)) {
+        return [{
+          name: '（没有常用提示词）',
+          description: '先在工具行的「常用提示词」里存一条',
+          value: PROMPT_EMPTY_VALUE,
+        }]
+      }
+      return rows
     },
     // 纯文本出口：返回 { text } 换掉触发词，草稿里只有文字、不生成引用卡片——
     // 所以这个源不需要 codec。哪天改成返回 { insert: { source: … } } 插卡片，
     // 就必须同时补 codec，否则发送会报 slash: no serializer for reference source "常用提示词"。
     onPick(pick) {
-      const id = pick.candidate.value
-      const item = knownItems().find((it) => it.id === id)
+      const value = pick.candidate.value
+      // 第一层选中入口：把 `@常用提示词` 写回草稿（替换掉那个 `@`），菜单留在打开状态；
+      // 下一帧按这个查询重新列条目，就是第二层。
+      if (value === PROMPT_ENTRY_VALUE) return { text: PROMPT_ENTRY_TEXT, continue: true }
+      if (value === PROMPT_EMPTY_VALUE) return undefined
+      const item = knownItems().find((it) => it.id === value)
       if (!item) return undefined
       // 普通文本替换掉「@查询段」，变量占位符原样留在正文里，进输入框后再改。
       return { text: item.text }
@@ -707,7 +756,7 @@ function typedAtChar(previous, next, caret) {
   return String(next || '').length === String(previous || '').length + 1 && String(next || '').charAt(caret - 1) === '@'
 }
 
-/** 行首图标：文件 / 文件夹 / 对话 / 插件（与输入框 @ 菜单同一套观感）。 */
+/** 行首图标：文件 / 文件夹 / 对话 / 插件 / 常用提示词（与输入框 @ 菜单同一套观感）。 */
 function MentionIcon(props) {
   const kind = props.kind
   const d = kind === 'folder'
@@ -716,7 +765,9 @@ function MentionIcon(props) {
       ? 'M2 3.6h10v6.1H6.6L4.2 11.7V9.7H2z'
       : kind === 'plugin'
         ? 'M3.2 3.2h7.6v7.6H3.2zM3.2 6.4h7.6M6.4 3.2v7.6'
-        : 'M4 1.9h4.4L10.9 4.4v7.7H4z'
+        : kind === 'prompt'
+          ? 'M2.4 2.6h9.2v8.8H2.4zM4.6 5h4.8M4.6 7h4.8M4.6 9h3'
+          : 'M4 1.9h4.4L10.9 4.4v7.7H4z'
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor"
       strokeWidth="1.1" strokeLinejoin="round" aria-hidden className="zps-mentionicon">
@@ -726,14 +777,15 @@ function MentionIcon(props) {
   )
 }
 
-/** 类别标签（与输入框里那套一致：点标签只看该类）。 */
-const MENTION_TABS = ['文件与文件夹', '对话', '插件']
+/** 类别标签的兜底顺序（正常按候选里出现的类别排，见 useMentionField 的 sections）。 */
+const MENTION_TABS = ['常用提示词', '文件与文件夹', '对话', '插件']
 
 /** @ 候选列表：顶部类别栏 + 当前类别的候选，点一项即插入。 */
 function MentionMenu(props) {
   const rows = props.rows
   const chosen = props.chosen
   const active = props.active || null
+  const tabs = Array.isArray(props.tabs) && props.tabs.length > 0 ? props.tabs : MENTION_TABS
   const visible = rows
   return (
     <div className="zps-mentionpanel">
@@ -747,7 +799,7 @@ function MentionMenu(props) {
         >
           全部
         </button>
-        {MENTION_TABS.map((tab) => (
+        {tabs.map((tab) => (
           <button
             key={tab}
             type="button"
@@ -817,7 +869,8 @@ function useMentionField(listFiles, applyPick) {
       }
       Promise.resolve(ask(query)).then((list) => {
         if (seq !== fetchSeq.current) return
-        setHits(Array.isArray(list) ? list.slice(0, 20) : [])
+        // 不在这里截断：后面按类别筛完再截，否则排在后面的类别（如常用提示词）永远进不来。
+        setHits(Array.isArray(list) ? list : [])
       }).catch(() => {
         if (seq === fetchSeq.current) setHits([])
       })
@@ -857,8 +910,17 @@ function useMentionField(listFiles, applyPick) {
 
   const close = useCallback(() => setMenu(null), [])
 
-  /** 类别栏筛选后的可见行。 */
-  const rows = activeSection ? hits.filter((row) => row.section === activeSection) : hits
+  /** 出现过哪些类别（按候选顺序）；某一类没有候选时对应标签也不出现。 */
+  const sections = []
+  for (const row of hits) {
+    if (row.section && !sections.includes(row.section)) sections.push(row.section)
+  }
+
+  /** 类别栏筛选后的可见行；选中的类别这轮没有候选就退回「全部」。 */
+  const currentSection = activeSection && sections.includes(activeSection) ? activeSection : null
+  // 先按类别筛、再截 40 行：排在后面的类别不会被前面的行挤掉。
+  const selected = currentSection ? hits.filter((row) => row.section === currentSection) : hits
+  const rows = selected.slice(0, 40)
 
   /** 选中一行：关菜单，把「@查询段」交给调用方替换成 row.mention。 */
   const pick = useCallback((row) => {
@@ -893,7 +955,7 @@ function useMentionField(listFiles, applyPick) {
     return false
   }, [chosen, menu, pick, rows])
 
-  return { menu, rows, chosen, activeSection, setActiveSection, setChosen, track, pick, onKeyDown, close }
+  return { menu, rows, sections, chosen, activeSection: currentSection, setActiveSection, setChosen, track, pick, onKeyDown, close }
 }
 
 /**
@@ -916,14 +978,18 @@ function TemplateEditor(props) {
   const textareaRef = useRef(null)
   const prevValue = useRef('')
 
-  /** 选中一行：把「@查询段」换成 row.mention，光标落在插入内容之后。 */
+  /** 选中一行：把「@查询段」换成插入内容，光标落在插入内容之后。 */
   const applyMention = useCallback((row, menu) => {
     const isTitle = menu.field === 'title'
     const current = isTitle ? String(editing.title || '') : String(editing.text || '')
-    const next = current.slice(0, menu.start) + row.mention + current.slice(menu.end)
+    // 常用提示词行按框给不同内容：标题框给条目名（单行），正文框给整段正文。
+    const insert = row.promptId !== undefined
+      ? (isTitle ? String(row.title || '') : String(row.text || ''))
+      : String(row.mention || '')
+    const next = current.slice(0, menu.start) + insert + current.slice(menu.end)
     if (isTitle) onTitle(next)
     else onText(next)
-    const caret = menu.start + row.mention.length
+    const caret = menu.start + insert.length
     prevValue.current = next
     window.requestAnimationFrame(() => {
       const el = isTitle ? titleRef.current : textareaRef.current
@@ -1008,6 +1074,7 @@ function TemplateEditor(props) {
         ? (
           <MentionMenu
             rows={mention.rows}
+            tabs={mention.sections}
             active={mention.activeSection}
             onSelect={(key) => { mention.setActiveSection(key); mention.setChosen(0) }}
             chosen={mention.chosen}
@@ -1036,13 +1103,15 @@ function VarField(props) {
   /** 候选浮层的位置：相对视口的 fixed 坐标。 */
   const [anchor, setAnchor] = useState(null)
 
-  /** 选中一行：把「@查询段」换成 row.mention。 */
+  /** 选中一行：把「@查询段」换成插入内容。 */
   const applyMention = useCallback((row, menu) => {
     const current = String(props.value || '')
-    const next = current.slice(0, menu.start) + row.mention + current.slice(menu.end)
+    // 常用提示词行：把整段正文填进这个变量。
+    const insert = row.promptId !== undefined ? String(row.text || '') : String(row.mention || '')
+    const next = current.slice(0, menu.start) + insert + current.slice(menu.end)
     onChange(next)
     prevValue.current = next
-    const caret = menu.start + row.mention.length
+    const caret = menu.start + insert.length
     window.requestAnimationFrame(() => {
       const el = inputRef.current
       if (!el) return
@@ -1108,6 +1177,7 @@ function VarField(props) {
           <div className="zps-varmenu" style={{ left: anchor.left, top: anchor.top, width: anchor.width }}>
             <MentionMenu
               rows={mention.rows}
+              tabs={mention.sections}
               active={mention.activeSection}
               onSelect={(key) => { mention.setActiveSection(key); mention.setChosen(0) }}
               chosen={mention.chosen}
@@ -1629,8 +1699,9 @@ function sessionMention(sessionId, label) {
 }
 
 /**
- * 造一个「按查询词列 @ 候选」的函数：与任务输入框一样分两组——文件与文件夹（宿主路由 /api/files）、
- * 对话（会话清单）。两者都只用本机数据，不依赖客户端的远程命名空间。
+ * 造一个「按查询词列 @ 候选」的函数：与任务输入框一样分类——常用提示词（本插件条目）、
+ * 文件与文件夹（宿主路由 /api/files）、对话（会话清单）、插件（插件清单）。
+ * 都只用本机数据，不依赖客户端的远程命名空间。
  * @param ctx - 客户端根上下文。
  * @returns 查询函数：query → 候选行 [{ id, label, desc, section, mention }]。
  */
@@ -1763,6 +1834,7 @@ function createMentionLister(ctx) {
     const [files, chats, plugins] = await Promise.all([
       listFiles(query, sessionId), listSessions(query, sessionId), listPlugins(query),
     ])
+    const keyword = String(query || '').trim().toLowerCase()
     const rows = []
     for (const hit of files) {
       const path = String((hit && hit.path) || '')
@@ -1802,6 +1874,24 @@ function createMentionLister(ctx) {
         desc: plugin.kind === 'personal' ? '个人插件' : '插件',
         section: '插件',
         mention: '@' + name,
+      })
+    }
+    // 常用提示词排最后一段：与任务输入框的 @ 同一顺序（文件 → 对话 → 插件 → 常用提示词）。
+    const prompts = sortItems(currentState().items.length > 0 ? currentState().items : readLocalCache().items)
+      .filter((item) => !keyword || (titleOf(item) + '\n' + item.text).toLowerCase().includes(keyword))
+      .slice(0, 20)
+    for (const item of prompts) {
+      const title = titleOf(item)
+      rows.push({
+        id: 'prompt:' + item.id,
+        icon: 'prompt',
+        label: title,
+        desc: compactPreview(item.text),
+        section: '常用提示词',
+        mention: item.text,
+        promptId: item.id,
+        title,
+        text: item.text,
       })
     }
     return rows

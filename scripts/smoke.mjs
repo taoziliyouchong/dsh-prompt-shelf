@@ -149,6 +149,8 @@ if (!idMatch) fail('客户端产物', '外壳里找不到 id')
 else if (idMatch[1] !== pkg.name) fail('客户端产物', '外壳 id 是 ' + idMatch[1] + '，应等于包名 ' + pkg.name)
 else if (!client.includes('/' + pkg.name + '/api/state')) fail('客户端产物', '产物里没有状态路由（源码改了但没重新构建）')
 else if (!client.includes('conversation.input.left')) fail('客户端产物', '产物里没有座位 conversation.input.left')
+// 窗口里的 @ 候选面板，以及任务输入框的 @ 源，两样都要在。
+else if (!client.includes('zps-mentionpanel')) fail('客户端产物', '产物里没有窗口 @ 候选面板（源码改了但没重新构建）')
 else if (!client.includes('registerSource')) fail('客户端产物', '产物里没有 @ 源注册（源码改了但没重新构建）')
 else ok('客户端产物', 'id=' + pkg.name + '，' + Buffer.byteLength(client, 'utf8') + ' 字节')
 

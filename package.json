@@ -1,6 +1,6 @@
 {
   "name": "dsh-prompt-shelf",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "description": "在输入框工具行里存常用提示词：搜索、插入或整框替换，带变量与回收站。",
   "type": "module",
   "main": "index.js",
@@ -21,7 +21,7 @@
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
-    "dsh": ">=0.2.1-0"
+    "dsh": ">=0.2.1-alpha.1"
   },
   "dsh": {
     "client": {

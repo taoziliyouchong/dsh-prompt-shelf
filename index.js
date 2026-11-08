@@ -10,12 +10,16 @@
  * 只接受本机回环请求。
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 
 /** 状态文件位置（与 profile 无关：所有 profile 共用一份用户数据）。 */
 const DSH_HOME = process.env.DSH_HOME || join(homedir(), '.dsh')
 const STATE_FILE = join(DSH_HOME, 'data', 'dsh-prompt-shelf', 'state.json')
+/** 宿主的工作区表：@ 文件清单只允许列这里登记过的目录。 */
+const WORKSPACE_INDEX = join(DSH_HOME, 'storages', 'workspace.json')
+/** 工作区根清单的短缓存，避免每次按键都读一遍表。 */
+let workspaceCache = { at: 0, roots: [] }
 /** 浏览器半边用的路由。 */
 const API_PATH = '/dsh-prompt-shelf/api/state'
 /** 工作区文件清单路由（编辑框里打 @ 用）。 */
@@ -78,7 +82,10 @@ export function apply(ctx) {
           const url = new URL(req.url || '/', 'http://localhost')
           const dir = url.searchParams.get('dir') || ''
           const query = url.searchParams.get('q') || ''
-          const { items, error } = listFilesIn(dir, query)
+          // 只认宿主工作区表里登记过的根：否则这条路由就等于一个任意目录浏览器。
+          const root = resolveWorkspaceRoot(dir)
+          if (!root) return sendJson(res, 403, { ok: false, error: '只允许列出已登记工作区内的目录' })
+          const { items, error } = listFilesIn(root, query)
           sendJson(res, 200, error ? { ok: true, items, error } : { ok: true, items })
         } catch (error) {
           sendJson(res, 400, { ok: false, error: String((error && error.message) || error) })
@@ -157,6 +164,46 @@ function writeState(state) {
   const tmp = STATE_FILE + '.tmp'
   writeFileSync(tmp, JSON.stringify({ v: 2, ...state }), 'utf8')
   renameSync(tmp, STATE_FILE)
+}
+
+/**
+ * 读宿主工作区表里的根目录清单。
+ * 文件不存在或读坏时返回空清单——宁可不列，也不放开任意目录。
+ * @returns 已登记的工作区根（绝对路径）。
+ */
+function workspaceRoots() {
+  const now = Date.now()
+  if (now - workspaceCache.at < 5000) return workspaceCache.roots
+  let roots = []
+  try {
+    const parsed = JSON.parse(readFileSync(WORKSPACE_INDEX, 'utf8'))
+    const table = parsed && parsed.tables && parsed.tables.workspaces
+    if (table && typeof table === 'object') {
+      roots = Object.values(table)
+        .map((entry) => (entry && typeof entry.path === 'string' ? resolve(entry.path) : ''))
+        .filter(Boolean)
+    }
+  } catch {
+    // 表不存在或损坏：按「没有可用根」处理
+  }
+  workspaceCache = { at: now, roots }
+  return roots
+}
+
+/**
+ * 把请求里的目录收进已登记的工作区根。
+ * @param dir - 客户端传来的目录（工作区根或它的子目录）。
+ * @returns 命中的工作区根；不在任何工作区内返回空串。
+ */
+function resolveWorkspaceRoot(dir) {
+  const target = typeof dir === 'string' ? dir.trim() : ''
+  if (!target) return ''
+  const lower = resolve(target).toLowerCase()
+  for (const root of workspaceRoots()) {
+    const base = root.toLowerCase()
+    if (lower === base || lower.startsWith(base + sep) || lower.startsWith(base + '/')) return root
+  }
+  return ''
 }
 
 /**
