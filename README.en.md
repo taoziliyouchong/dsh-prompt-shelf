@@ -35,9 +35,8 @@ In that body box, **Alt+V** (or Ctrl+Alt+V) does the same; it only works there, 
 
 ## Picking from the @ menu
 
-- In the task composer, typing `@` shows a single "Saved prompts" entry first; picking it expands the saved
-  list, and picking a row from that list drops its body at the cursor. Typing after the expansion filters the
-  list; pressing Esc leaves `@常用提示词` in the draft for you to delete.
+- In the task composer, typing `@` lists the saved prompts directly (most recently used first); typing
+  further filters by title and body keyword, and picking a row drops its body at the cursor.
 - In the card editor's title and body inputs, typing `@` lists "Saved prompts / Files and folders / Chats /
   Plugins"; the tab bar above the list narrows it to one kind. Picking a saved prompt inserts its title in
   the title input and its full body in the body input; picking a file inserts `@path` (folders end with a

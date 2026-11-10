@@ -557,28 +557,14 @@ function compactPreview(text) {
   return compact.length > 60 ? compact.slice(0, 60) + '…' : compact
 }
 
-/** 第一层的入口名，也是入口选中后写回草稿的触发查询。 */
+/** @ 源的名称：候选在菜单里归在「常用提示词」这一类下。 */
 const PROMPT_ENTRY = '常用提示词'
-/** 入口选中后写回草稿的文字：替换掉那个 `@`，菜单按这个查询重开就是第二层。 */
-const PROMPT_ENTRY_TEXT = '@' + PROMPT_ENTRY
-/** 入口行的取值（与条目 id 区分开）。 */
-const PROMPT_ENTRY_VALUE = 'prompt-entry'
-/** 第二层没有条目时的说明行。 */
+/** 一条条目都没有时的说明行。 */
 const PROMPT_EMPTY_VALUE = 'prompt-empty'
 
-/** 查询是不是已经进了「常用提示词」这一层（选中入口后草稿里留着 `@常用提示词`）。 */
-function promptLayer(query) {
-  return String(query || '').startsWith(PROMPT_ENTRY)
-}
-
-/** 第二层里的过滤词：`@常用提示词` 后面继续打的字；没进第二层就整段查询词。 */
-function promptKeyword(query) {
-  const text = String(query || '')
-  return (promptLayer(text) ? text.slice(PROMPT_ENTRY.length) : text).trim().toLowerCase()
-}
-
 /**
- * 输入框的 @ 触发来源：分两层——打 @ 先只出「常用提示词」一项，选中它才展开条目列表。
+ * 输入框的 @ 触发来源：打开即列条目（最近用过的在前），接着打字按关键词过滤，
+ * 选一条把正文落到光标处。不再先出一个「展开列表」的入口。
  * 走宿主公开的 inputTriggers.registerSource（与宿主的 @ 文件/会话来源并列），不碰编辑器。
  */
 function createPromptSource() {
@@ -592,27 +578,21 @@ function createPromptSource() {
     name: PROMPT_ENTRY,
     // 20：排在「工作区文件」(10) 之后、「历史会话」(30) 之前，和别的 @ 源同序时顺序稳定。
     order: 20,
-    // 第一层只有一项，组标题会和那一项重名；不画组标题。
-    showGroupTitle: false,
     async candidates(_session, req) {
-      const query = String(req.query || '')
-      // 第一层：@ 之后什么都没打时只出入口。选中入口后 onPick 把 `@常用提示词` 写回草稿，
-      // 菜单按这个查询重开，才进第二层。
-      if (query === '') {
+      const query = String(req.query || '').trim()
+      // 兼容旧草稿里留下的 `@常用提示词`：去掉这个前缀再当关键词用。
+      const keyword = (query.startsWith(PROMPT_ENTRY) ? query.slice(PROMPT_ENTRY.length) : query)
+        .trim().toLowerCase()
+      const items = sortItems(knownItems())
+      if (items.length === 0) {
         return [{
-          name: PROMPT_ENTRY,
-          label: PROMPT_ENTRY,
-          description: '展开常用提示词列表',
-          drill: true,
-          value: PROMPT_ENTRY_VALUE,
+          name: '（没有常用提示词）',
+          description: '先在工具行的「常用提示词」里存一条',
+          value: PROMPT_EMPTY_VALUE,
         }]
       }
-      // 没进「常用提示词」这一层就什么都不出：条目只在选中入口之后才出现，
-      // 不会跟着别的关键词一起冒出来。
-      if (!promptLayer(query)) return []
-      const keyword = promptKeyword(query)
       const used = new Map()
-      const rows = sortItems(knownItems())
+      return items
         .filter((item) => !keyword
           || (titleOf(item) + '\n' + item.text).toLowerCase().includes(keyword))
         .slice(0, 20)
@@ -626,23 +606,12 @@ function createPromptSource() {
             value: item.id,
           }
         })
-      if (rows.length === 0 && promptLayer(query)) {
-        return [{
-          name: '（没有常用提示词）',
-          description: '先在工具行的「常用提示词」里存一条',
-          value: PROMPT_EMPTY_VALUE,
-        }]
-      }
-      return rows
     },
     // 纯文本出口：返回 { text } 换掉触发词，草稿里只有文字、不生成引用卡片——
     // 所以这个源不需要 codec。哪天改成返回 { insert: { source: … } } 插卡片，
     // 就必须同时补 codec，否则发送会报 slash: no serializer for reference source "常用提示词"。
     onPick(pick) {
       const value = pick.candidate.value
-      // 第一层选中入口：把 `@常用提示词` 写回草稿（替换掉那个 `@`），菜单留在打开状态；
-      // 下一帧按这个查询重新列条目，就是第二层。
-      if (value === PROMPT_ENTRY_VALUE) return { text: PROMPT_ENTRY_TEXT, continue: true }
       if (value === PROMPT_EMPTY_VALUE) return undefined
       const item = knownItems().find((it) => it.id === value)
       if (!item) return undefined
