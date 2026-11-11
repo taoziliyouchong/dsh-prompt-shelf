@@ -31,7 +31,7 @@ const PLUGINS_API = '/dsh-prompt-shelf/api/plugins'
 /** 没写标题时，取正文首行前多少字当标题。 */
 const TITLE_MAX = 28
 /** 编辑表单下的占位符写法说明。 */
-const TEMPLATE_HINT = '正文里写 {{变量名}}，或 {{变量名=默认值}}；插入时用卡片里填的值替换（不填就用默认值）。正文框里按 Alt+V（或 Ctrl+Alt+V）也能插入变量；卡片上的变量框里打 @ 可引用工作区文件。'
+const TEMPLATE_HINT = '正文里写 {{变量名}}，或 {{变量名=默认值}}；插入时用卡片里填的值替换（不填就用默认值）。同名占位符算同一个变量、共用一处值；连续插变量会自动编号（变量、变量2…）。正文框里按 Alt+V（或 Ctrl+Alt+V）也能插入变量；卡片上的变量框里打 @ 可引用工作区文件。'
 
 /** 输入框不可用时的兜底状态（dock 是 session 范围，理论上永远有输入框）。 */
 const EMPTY_INPUT = { draft: '' }
@@ -653,6 +653,24 @@ function parseTemplate(text) {
   return parts
 }
 
+/**
+ * 插入新变量时避开正文里已有的名字：变量、变量2、变量3……
+ * 同名占位符按名字共用一个值，新插入的变量必须换一个还没用过的名字，两处才不会绑在一起。
+ * @param text - 正文原文。
+ * @returns 一个还没被占用的变量名。
+ */
+function nextVarName(text) {
+  const used = new Set(
+    parseTemplate(text)
+      .filter((part) => part.type === 'var')
+      .map((part) => part.name),
+  )
+  if (!used.has('变量')) return '变量'
+  let index = 2
+  while (used.has('变量' + index)) index += 1
+  return '变量' + index
+}
+
 /** 某个变量当前的取值（没填过用默认值）。 */
 function templateValue(values, name, fallback) {
   const given = values ? values[name] : undefined
@@ -975,13 +993,15 @@ function TemplateEditor(props) {
     const text = String(editing.text || '')
     const start = node && typeof node.selectionStart === 'number' ? node.selectionStart : text.length
     const end = node && typeof node.selectionEnd === 'number' ? node.selectionEnd : start
-    const token = '{{变量}}'
+    // 已有同名变量就顺延成 变量2、变量3……，新插入的和上一个不会绑在一起。
+    const name = nextVarName(text)
+    const token = '{{' + name + '}}'
     onText(text.slice(0, start) + token + text.slice(end))
     window.requestAnimationFrame(() => {
       const next = textareaRef.current
       if (!next) return
       next.focus()
-      next.setSelectionRange(start + 2, start + 4)
+      next.setSelectionRange(start + 2, start + 2 + name.length)
     })
   }, [editing.text, onText])
 
@@ -1030,7 +1050,7 @@ function TemplateEditor(props) {
         <button
           type="button"
           className="zps-btn"
-          title="在光标处插入 {{变量}}（Alt+V，或 Ctrl+Alt+V）——插完直接打字就是改变量名"
+          title="在光标处插入变量（Alt+V，或 Ctrl+Alt+V）；和已有变量重名会自动编号，插完直接打字就是改名"
           onClick={insertVariable}
         >
           ＋ 变量
@@ -1530,14 +1550,16 @@ export function PromptShelf(props) {
               visible.map((item) => {
                 const parts = parseTemplate(item.text)
                 const varNames = parts.filter((part) => part.type === 'var').map((part) => part.name)
+                // 同名占位符是同一个变量，徽标按去重后的名字数算，免得「两处同名」被数成两个变量。
+                const uniqueNames = Array.from(new Set(varNames))
                 const editingThis = editing !== null && editing.id === item.id
                 return (
                   <article className="zps-card" key={item.id}>
                     <div className="zps-cardhead">
                       <h3 className="zps-cardtitle">{titleOf(item)}</h3>
-                      {varNames.length > 0 ? (
-                        <span className="zps-varbadge" title={'变量：' + varNames.join('、')}>
-                          {varNames.length} 个变量
+                      {uniqueNames.length > 0 ? (
+                        <span className="zps-varbadge" title={'变量：' + uniqueNames.join('、')}>
+                          {uniqueNames.length} 个变量
                         </span>
                       ) : null}
                       <div className="zps-cardactions">

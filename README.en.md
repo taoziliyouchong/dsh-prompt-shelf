@@ -27,10 +27,11 @@ New-session blank pages show it too.
 
 Write `{{name}}` or `{{name=default}}` in the body and that spot becomes an input field on the card:
 inserting substitutes the filled value, falling back to the default, and same-named variables share one value.
+Picking a name that is already taken auto-numbers the new one (`{{variable2}}`, `{{variable3}}`, …), so two variables never bind by accident.
 A variable box also accepts `@` to reference workspace files (see below).
 
 Editing a card shows the raw `{{…}}` template, which is where you change it. While creating or editing,
-"＋ Variable" below the body box inserts `{{variable}}` at the cursor and selects the word, so typing renames it.
+"＋ Variable" below the body box inserts `{{variable}}` at the cursor and selects the word, so typing renames it. If that name is already used, the new one becomes `{{variable2}}`, `{{variable3}}`, and so on.
 In that body box, **Alt+V** (or Ctrl+Alt+V) does the same; it only works there, not globally.
 
 ## Picking from the @ menu
